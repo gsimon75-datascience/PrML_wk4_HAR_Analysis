@@ -1,5 +1,9 @@
 # Practical Machine Learning - Week 4 Assignment
 
+## The analysis
+
+You can find the result [here](https://gsimon75.github.io/PrML_wk4_HAR_Analysis/)
+
 ## Background
 
 Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively.
@@ -31,5 +35,4 @@ The goal of your project is to predict the manner in which they did the exercise
 * What is the expected out of sample error is
 * Reasons behind the choices
 * <2000 words, <5 figures, online viewable HTML as well
-
 
