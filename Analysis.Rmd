@@ -3,7 +3,7 @@ title: |
  | Practical Machine Learning
  | HAR Analysis
 author: "Gabor Simon"
-output: 
+output:
   html_document:
           toc: true
 ---
@@ -12,16 +12,141 @@ output:
 
 We are building a model to make predictions based on the [HAR Data](http://groupware.les.inf.puc-rio.br/har).
 
-```{r setup_environment, message = FALSE}
-library(caret)
-set.seed(1512299670)
-```
-## Exploratory Data Analysis
-
 ## Building the model
 
-## Cross validation
+First of all, for Cross Validation we split `pml-training.csv` in 75-25% ratio.
 
-## Out-of-sample error
+There are administrative columns that must be dropped, along with those
+that contain more than 80% NAs and those that are constant.
+
+As there is a high correlation between the columns, a Principal Component Analysis will
+reduce them to smaller set of linear combinations.
+
+Then we can fit a RandomForest model on these PCs.
+
+(A side effect of PCA is that the PCs no longer have intuitive meaning, so it doesn't make
+too much sense to make plots of them.)
+
+
+```{r setup_environment, message = FALSE}
+library(caret)
+library(randomForest)
+
+set.seed(1512299670)
+
+# read the input data set
+if (!file.exists("pml-training.csv"))
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-training.csv")
+raw <- read.csv("pml-training.csv", na.strings=c("NA", "#DIV/0!"), stringsAsFactors=FALSE)
+
+# remove administrative columns
+raw$X <- NULL
+raw$user_name <- NULL
+raw$raw_timestamp_part_1 <- NULL
+raw$raw_timestamp_part_2 <- NULL
+raw$cvtd_timestamp <- NULL
+raw$new_window <- NULL
+raw$num_window <- NULL
+
+# remove columns which are >80% NAs
+na_limit <- nrow(raw) * 0.8
+raw <- raw[,colSums(is.na(raw)) < na_limit]
+
+# remove constant colums
+classeIdx <- which(colnames(raw) == "classe")
+raw2 <- raw[,apply(raw[,-classeIdx], 2, var, na.rm=TRUE) != 0]
+raw2$classe <- factor(raw$classe)
+#raw <- NULL
+dim(raw2)
+
+# split 75-25% for cross validation
+inTrain <- createDataPartition(raw2$classe, p=0.75, list=FALSE)
+training <- raw2[inTrain,]
+testing <- raw2[-inTrain,]
+
+# check correlating columns, shall we do PCA?
+classeIdx <- which(colnames(raw2) == "classe")
+M <- abs(cor(training[, -classeIdx]))
+diag(M) <- 0
+which(M > 0.8, arr.ind=TRUE)
+```
+38 predictors are highly correlated, so it makes sense to do a Principal Component Analysis
+
+```{r doing_pca, message=FALSE}
+# as this is part of our model, cache it for preserving it
+if (!file.exists("xformPCA.rds")) {
+    xformPCA <- preProcess(training[, -classeIdx], method="pca", thresh=0.95)
+    saveRDS(xformPCA, "xformPCA.rds")
+} else {
+    xformPCA <- readRDS("xformPCA.rds")
+}
+xformPCA
+
+# generate the Principal Components of the training set
+trainingPCs <- predict(xformPCA, training[, -classeIdx])
+trainingPCs$classe <- training$classe
+```
+
+```{r building_model, message=FALSE}
+# build the model using the PCs
+# this takes *a lot* of time (an hour for me!), so do some caching
+if (!file.exists("modelFit.rds")) {
+    modelFit <- train(classe ~ ., method="rf", data=trainingPCs, importance=TRUE)
+    saveRDS(modelFit, "modelFit.rds")
+} else {
+    modelFit <- readRDS("modelFit.rds")
+}
+modelFit
+```
+An accuracy of 0.9656 seems promising, worth to check Cross Validation on this model.
+
+## Cross Validation and Out-of-Sample Error
+
+We trained the model on 70% of our data, now we'll make use of the remaining 30%
+testing set as well.
+
+Applying our model first to our 70%-training set to get the In-Sample Error:
+```{r predicting_training_data}
+check_training <- predict(modelFit$finalModel, trainingPCs[, -classeIdx])
+confusionMatrix(check_training, training$classe)
+```
+An accuracy of 0.9944 means an In-Sample Error of 0.0056, so the model
+describes the training set quite well, it's worth checking the Out-of-Sample Error as well.
+
+
+Applying our model to our 30%-testing set to get the Out-of-Sample Error:
+```{r predicting_testing_data}
+testingPCs <- predict(xformPCA, testing[, -classeIdx])
+testingPCs$classe <- testing$classe
+check_testing <- predict(modelFit$finalModel, testingPCs[, -classeIdx])
+confusionMatrix(check_testing, testing$classe)
+```
+An accuracy of 0.9945 means an In-Sample Error of 0.0055, about as good as
+the In-Sample Error, so the model performs quite well also on new data.
 
 ## Conclusions
+
+In our model we used 53 of the 159 input columns, built 26 Principal Components
+as linear combinations of them, and finally trained a Random Forest model
+using these 26 PCAs.
+
+The In-Sample error of this model was 0.0056, the Out-of-Sample Error was 0.0055,
+so the module works quite accurately on new data as well.
+
+## Checking the 20 'testing' cases
+
+After reading the file we keep the same columns as in the training set,
+calculate the PCs using the same transformation, then apply the model to them:
+
+```{r predicting_20}
+if (!file.exists("pml-testing.csv"))
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "pml-testing.csv")
+
+newtestraw <- read.csv("pml-testing.csv", na.strings=c("NA", "#DIV/0!"), stringsAsFactors=FALSE)
+newtest <- subset(newtestraw, select=names(raw2[,-classeIdx]))
+newtestPCs <- predict(xformPCA, newtest) 
+pred_newtest <- predict(modelFit$finalModel, newtestPCs)
+result <- data.frame(problem_id = newtestraw$problem_id, prediction = pred_newtest)
+result
+```
+
